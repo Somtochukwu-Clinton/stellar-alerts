@@ -58,8 +58,8 @@ export function PaymentHistory({ walletId }: { walletId: string }) {
       ) : payments.length === 0 ? (
         <p className="text-gray-500">No payments found for this address.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+        <div className="-mx-4 sm:mx-0 overflow-x-auto rounded-lg [scrollbar-width:thin]">
+          <table className="w-full min-w-[560px] text-left border-collapse">
             <thead>
               <tr className="border-b dark:border-gray-700">
                 <th className="p-2">Date</th>
@@ -73,10 +73,10 @@ export function PaymentHistory({ walletId }: { walletId: string }) {
               {payments.map(p => (
                 <tr key={p.id} className="border-b dark:border-gray-700">
                   <td className="p-2">{new Date(p.createdAt).toLocaleDateString()}</td>
-                  <td className="p-2 truncate max-w-xs" title={p.fromAddress}>{p.fromAddress}</td>
+                  <td className="p-2 truncate max-w-[160px]" title={p.fromAddress}>{p.fromAddress}</td>
                   <td className="p-2 font-mono text-green-600 dark:text-green-400">+{p.amount}</td>
                   <td className="p-2">{p.asset}</td>
-                  <td className="p-2 truncate max-w-xs" title={p.txHash}>{p.txHash}</td>
+                  <td className="p-2 truncate max-w-[140px]" title={p.txHash}>{p.txHash}</td>
                 </tr>
               ))}
             </tbody>

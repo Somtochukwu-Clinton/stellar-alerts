@@ -66,6 +66,14 @@ body {
   border-radius: 0.75rem;
 }
 
+/* Tighter chrome on small phones (down to 360px) so content keeps maximum width */
+@media (max-width: 640px) {
+  .glass-inner {
+    padding: 0.625rem;
+    border-radius: 0.875rem;
+  }
+}
+
 ::selection {
   background-color: rgba(124,58,237,0.22);
   color: #fff;

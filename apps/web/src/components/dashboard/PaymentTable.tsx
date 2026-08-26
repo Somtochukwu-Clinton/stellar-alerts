@@ -29,8 +29,8 @@ export const PaymentTable: React.FC<PaymentTableProps> = ({ payments, isLoading 
           No payments recorded yet. Trigger a payment on Stellar Testnet to see live ingestion!
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm border-collapse">
+        <div className="-mx-4 sm:mx-0 overflow-x-auto rounded-lg [scrollbar-width:thin]">
+          <table className="w-full min-w-[640px] text-left text-sm border-collapse">
             <thead>
               <tr className="border-b border-slate-800 text-xs font-semibold uppercase tracking-wider text-slate-400">
                 <th className="py-3.5 px-4">Timestamp</th>
