@@ -2,18 +2,11 @@
 
 import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
-
-interface Payment {
-  id: string;
-  txHash: string;
-  fromAddress: string;
-  amount: string;
-  asset: string;
-  createdAt: string;
-}
+import { PaymentTable } from './dashboard/PaymentTable';
+import { PaymentDTO } from '@stellar-alerts/shared';
 
 export function PaymentHistory({ walletId }: { walletId: string }) {
-  const [payments, setPayments] = useState<Payment[]>([]);
+  const [payments, setPayments] = useState<PaymentDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const { data: session } = useSession();
 
@@ -46,7 +39,7 @@ export function PaymentHistory({ walletId }: { walletId: string }) {
     if (walletId) {
       fetchPayments();
     }
-  }, [walletId]);
+  }, [walletId, session]);
 
   if (!walletId) return null;
 
@@ -86,3 +79,4 @@ export function PaymentHistory({ walletId }: { walletId: string }) {
     </div>
   );
 }
+
