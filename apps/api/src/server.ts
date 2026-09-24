@@ -1,15 +1,22 @@
 import { env } from './config/env';
 import { buildApp } from './app';
 import { prisma, connectWithRetry } from './lib/prisma';
+import { startTelemetry, shutdownTelemetry } from './lib/telemetry';
 
 const start = async () => {
   try {
     await connectWithRetry();
+    await startTelemetry();
     const app = await buildApp();
     const port = parseInt(env.PORT, 10);
 
     await app.listen({ port, host: '0.0.0.0' });
     console.log(`🚀 Server listening on http://localhost:${port}`);
+
+    if (process.env.START_WORKER !== 'false') {
+      const { runWatcher } = await import('./workers/watcher.worker');
+      runWatcher().catch((err) => console.error('⚠️ Watcher worker error:', err));
+    }
 
     const shutdown = async () => {
       console.log('🛑 Graceful shutdown initiated...');
@@ -20,6 +27,7 @@ const start = async () => {
 
       await app.close();
       await prisma.$disconnect();
+      await shutdownTelemetry();
       console.log('✅ Server and Prisma closed cleanly');
       process.exit(0);
     };

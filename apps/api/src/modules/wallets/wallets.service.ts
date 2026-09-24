@@ -1,5 +1,4 @@
-import { prisma } from '../../lib/prisma';
-import { verifyZkProof } from '../../utils/zkp-verifier';
+import { prisma, prismaRead } from '../../lib/prisma';
 
 export class WalletsService {
   async addWallet(userId: string, publicKey: string, label?: string, zkProof?: any, publicSignals?: string[]) {
@@ -26,18 +25,25 @@ export class WalletsService {
       targetUserId = anonUser.id;
     }
 
-    const wallet = await prisma.wallet.create({
-      data: {
-        userId: targetUserId,
-        publicKey,
-        label,
-      },
-    });
-    return wallet;
+    try {
+      const wallet = await prisma.wallet.create({
+        data: {
+          userId: targetUserId,
+          publicKey,
+          label,
+        },
+      });
+      return wallet;
+    } catch (error: any) {
+      if (error.code === 'P2002') {
+        throw new Error('Wallet already exists');
+      }
+      throw error;
+    }
   }
 
   async getWallets(userId: string) {
-    return prisma.wallet.findMany({
+    return prismaRead.wallet.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' }
     });

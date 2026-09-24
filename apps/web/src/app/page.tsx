@@ -1,18 +1,27 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import NetworkVisualizer3D from '@/components/dashboard/NetworkVisualizer3D';
+import AuditWorkspace from '@/components/dashboard/AuditWorkspace';
 import { signOut, useSession } from 'next-auth/react';
 import { WalletDTO, PaymentDTO } from '@stellar-alerts/shared';
 import { WatcherForm } from '@/components/WatcherForm';
 import {
+  DashboardGrid,
   SummaryStats,
+  VolumeChart,
+  WebhookSandbox,
   WalletList,
   PaymentTable,
   NotificationModal,
+  ActivityHeatmap,
+  EmailTemplatePreview,
 } from '@/components/dashboard';
+import { useBatchReader } from '@/lib/hooks/useBatchReader';
 
 export default function Home() {
   const { data: session } = useSession();
+  const batchReader = useBatchReader(); // NEW: Batched read layer
   const [emailInput, setEmailInput] = useState('');
   const [sentEmail, setSentEmail] = useState('');
   const [devMagicUrl, setDevMagicUrl] = useState<string | null>(null);
@@ -29,80 +38,98 @@ export default function Home() {
   const [payments, setPayments] = useState<PaymentDTO[]>([]);
   const [isLoadingPayments, setIsLoadingPayments] = useState<boolean>(false);
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState<boolean>(false);
   const [totalVolumeXLM, setTotalVolumeXLM] = useState<number>(0);
   const [totalPaymentsCount, setTotalPaymentsCount] = useState<number>(0);
+  const [crossLedgerAnalytics, setCrossLedgerAnalytics] = useState<any>(null);
 
-  // Helper to get auth headers
+  // Helper to get auth headers (kept for non-batched endpoints like auth)
   const getHeaders = useCallback(() => {
     const headers: Record<string, string> = {};
-    if (session && (session as any).accessToken) {
-      headers['Authorization'] = `Bearer ${(session as any).accessToken}`;
+    const accessToken = (session as (typeof session & AppSession) | null)?.accessToken;
+    if (accessToken) {
+      headers['Authorization'] = `Bearer ${accessToken}`;
     }
     return headers;
   }, [session]);
 
-  // Fetch wallets
-  const fetchWallets = useCallback(async () => {
-    if (!session) return;
-    try {
-      const res = await fetch('http://localhost:3001/wallets', { headers: getHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && Array.isArray(data.wallets)) {
-          setWallets(data.wallets);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch wallets:', err);
-    }
-  }, [session, getHeaders]);
-
-  // Fetch payments
-  const fetchPayments = useCallback(async () => {
+  /**
+   * NEW BATCHED APPROACH:
+   * Single fetch that groups wallets + payments + summary into one cached call.
+   * 
+   * OLD APPROACH (commented out below):
+   * - fetchWallets() → 1 RPC call
+   * - fetchPayments() → 1 RPC call  
+   * - fetchSummary() → 1 RPC call
+   * = 3 separate round-trips, no caching
+   */
+  const fetchDashboardData = useCallback(async () => {
     if (!session) return;
     setIsLoadingPayments(true);
     try {
-      const url = selectedWalletId
-        ? `http://localhost:3001/payments?walletId=${encodeURIComponent(selectedWalletId)}`
-        : 'http://localhost:3001/payments';
-      const res = await fetch(url, { headers: getHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && Array.isArray(data.payments)) {
-          setPayments(data.payments);
-        }
-      }
+      const data = await batchReader.fetchUserPortfolioBatched(
+        selectedWalletId || undefined
+      );
+      
+      setWallets(data.wallets);
+      setPayments(data.payments);
+      setTotalVolumeXLM(data.summary.totalVolumeXLM);
+      setTotalPaymentsCount(data.summary.totalPayments);
     } catch (err) {
-      console.error('Failed to fetch payments:', err);
+      console.error('Failed to fetch dashboard data:', err);
     } finally {
       setIsLoadingPayments(false);
     }
-  }, [session, selectedWalletId, getHeaders]);
+  }, [session, selectedWalletId, batchReader]);
 
-  // Fetch summary stats
-  const fetchSummary = useCallback(async () => {
-    if (!session) return;
-    try {
-      const res = await fetch('http://localhost:3001/payments/summary', { headers: getHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.summary) {
-          setTotalVolumeXLM(Number(data.summary.totalVolumeXLM || 0));
-          setTotalPaymentsCount(Number(data.summary.totalPayments || 0));
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch summary:', err);
-    }
-  }, [session, getHeaders]);
+  // const fetchPayments = useCallback(async () => {
+  //   if (!session) return;
+  //   setIsLoadingPayments(true);
+  //   try {
+  //     const url = selectedWalletId
+  //       ? `http://localhost:3001/payments?walletId=${encodeURIComponent(selectedWalletId)}`
+  //       : 'http://localhost:3001/payments';
+  //     const res = await fetch(url, { headers: getHeaders() });
+  //     if (res.ok) {
+  //       const data = await res.json();
+  //       if (data.success && Array.isArray(data.payments)) {
+  //         setPayments(data.payments);
+  //       }
+  //     }
+  //   } catch (err) {
+  //     console.error('Failed to fetch payments:', err);
+  //   } finally {
+  //     setIsLoadingPayments(false);
+  //   }
+  // }, [session, selectedWalletId, getHeaders]);
+
+  // const fetchSummary = useCallback(async () => {
+  //   if (!session) return;
+  //   try {
+  //     const res = await fetch('http://localhost:3001/payments/summary', { headers: getHeaders() });
+  //     if (res.ok) {
+  //       const data = await res.json();
+  //       if (data.success && data.summary) {
+  //         setTotalVolumeXLM(Number(data.summary.totalVolumeXLM || 0));
+  //         setTotalPaymentsCount(Number(data.summary.totalPayments || 0));
+  //       }
+  //     }
+  //   } catch (err) {
+  //     console.error('Failed to fetch summary:', err);
+  //   }
+  // }, [session, getHeaders]);
 
   useEffect(() => {
     if (session) {
-      fetchWallets();
-      fetchPayments();
-      fetchSummary();
+      // NEW: Single batched call instead of 3 separate calls
+      fetchDashboardData();
+      
+      // OLD: 3 separate unbatched calls
+      // fetchWallets();
+      // fetchPayments();
+      // fetchSummary();
     }
-  }, [session, selectedWalletId, fetchWallets, fetchPayments, fetchSummary]);
+  }, [session, selectedWalletId, fetchDashboardData]);
 
   const handleRemoveWallet = async (id: string) => {
     try {
@@ -114,12 +141,28 @@ export default function Home() {
         if (selectedWalletId === id) {
           setSelectedWalletId(null);
         }
-        fetchWallets();
-        fetchPayments();
-        fetchSummary();
+        // NEW: Invalidate cache after mutation
+        batchReader.invalidateAll();
+        // Then refetch with batched call
+        fetchDashboardData();
       }
     } catch (err) {
       console.error('Failed to remove wallet:', err);
+    }
+  };
+
+  const handleSaveEmailTemplate = async (template: EmailTemplateConfig) => {
+    try {
+      await fetch('http://localhost:3001/notifications/preferences', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getHeaders(),
+        },
+        body: JSON.stringify({ emailTemplate: template }),
+      });
+    } catch (err) {
+      console.error('Failed to save email template preferences:', err);
     }
   };
 
@@ -356,11 +399,69 @@ export default function Home() {
           onClose={() => setIsNotificationModalOpen(false)}
           onSavePreferences={handleSavePreferences}
         />
+
+        {/* Command Palette ? press ?K / Ctrl+K to navigate & run quick actions */}
+        <CommandPalette
+          open={isCommandPaletteOpen}
+          onOpenChange={setIsCommandPaletteOpen}
+          groups={[
+            {
+              id: 'navigation',
+              label: 'Navigation',
+              items: [
+                {
+                  id: 'add-wallet',
+                  label: 'Add a wallet',
+                  keywords: ['watch', 'monitor', 'track', 'new wallet'],
+                  shortcut: 'G W',
+                  icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                    </svg>
+                  ),
+                  onSelect: () => {
+                    const el = document.getElementById('add-wallet-section');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                  },
+                },
+                {
+                  id: 'alert-settings',
+                  label: 'Alert settings',
+                  keywords: ['notification', 'telegram', 'email', 'preferences', 'bell'],
+                  shortcut: 'G A',
+                  icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                    </svg>
+                  ),
+                  onSelect: () => setIsNotificationModalOpen(true),
+                },
+              ],
+            },
+            {
+              id: 'account',
+              label: 'Account',
+              items: [
+                {
+                  id: 'sign-out',
+                  label: 'Sign out',
+                  keywords: ['logout', 'exit', 'session'],
+                  icon: (
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                    </svg>
+                  ),
+                  onSelect: () => void signOut(),
+                },
+              ],
+            },
+          ]}
+        />
       </div>
     );
   }
 
-  // Unauthenticated State — World-Class Landing Page
+  // Unauthenticated State ? World-Class Landing Page
   return (
     <div className="min-h-screen bg-[#030307] text-gray-100 font-sans selection:bg-cyan-500/30 overflow-x-hidden relative">
       {/* Background Ambient Glows & Grid Pattern */}
@@ -462,7 +563,7 @@ export default function Home() {
           <svg className="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
-          Horizon Network Ingestion • Zero-Delay Alerts
+          Horizon Network Ingestion ? Zero-Delay Alerts
         </div>
 
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight text-white max-w-5xl mx-auto leading-[1.1] mb-8">
@@ -575,7 +676,7 @@ export default function Home() {
                     href={devMagicUrl}
                     className="block w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs text-center shadow-lg transition-all cursor-pointer"
                   >
-                    ⚡ Click to Authenticate Instantly
+                    ? Click to Authenticate Instantly
                   </a>
                 </div>
               )}
@@ -841,7 +942,7 @@ export default function Home() {
                     href={devMagicUrl}
                     className="block w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs text-center shadow-lg transition-all cursor-pointer mt-2"
                   >
-                    ⚡ Click to Authenticate Instantly (Dev)
+                    ? Click to Authenticate Instantly (Dev)
                   </a>
                 )}
               </div>
@@ -861,7 +962,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-2">
             <span className="text-sm font-bold text-white">StellarAlerts</span>
-            <span className="text-xs text-gray-500">— Non-Custodial Stellar Payment Tracker</span>
+            <span className="text-xs text-gray-500">? Non-Custodial Stellar Payment Tracker</span>
           </div>
           <p className="text-xs text-gray-500">Released under the MIT License</p>
         </div>

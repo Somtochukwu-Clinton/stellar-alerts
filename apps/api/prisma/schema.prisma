@@ -8,13 +8,18 @@ datasource db {
 }
 
 model User {
-  id          String                   @id @default(cuid())
+  id           String                  @id @default(cuid())
   email       String                   @unique
+  mfaSecret   String?                  // TOTP secret for MFA
+  mfaEnabled  Boolean                  @default(false)
   createdAt   DateTime                 @default(now())
   wallets     Wallet[]
   webhooks    Webhook[]
   notifyPrefs NotificationPreference?
   sorobanSubscriptions SorobanContractSubscription[]
+  multisigSignerWatches MultisigSignerWatcher[]
+  anchorWatches         AnchorTransactionWatch[]
+  dexSwapWatches        DexSwapWatch[]
 }
 
 model Wallet {
@@ -23,7 +28,7 @@ model Wallet {
   user       User             @relation(fields: [userId], references: [id])
   publicKey  String           @unique
   label      String?
-  createdAt  DateTime         @default(now())
+  createdAt   DateTime         @default(now())
   payments   Payment[]
   cursor     IngestionCursor?
 }
@@ -68,15 +73,19 @@ model NotificationPreference {
 }
 
 model Webhook {
-  id        String                   @id @default(cuid())
-  userId    String
-  user      User                     @relation(fields: [userId], references: [id])
-  url       String
-  secret    String
-  isActive  Boolean                  @default(true)
-  createdAt DateTime                 @default(now())
-  logs      WebhookLog[]
-  circuitBreaker WebhookCircuitBreaker?
+  id                String                   @id @default(cuid())
+  userId            String
+  user              User                     @relation(fields: [userId], references: [id])
+  url               String
+  secretCiphertext  String
+  secretIv          String
+  secretAuthTag     String
+  keyVersion        Int                      @default(1)
+  payloadTemplate   String?
+  isActive          Boolean                  @default(true)
+  createdAt         DateTime                 @default(now())
+  logs              WebhookLog[]
+  circuitBreaker    WebhookCircuitBreaker?
 }
 
 model WebhookLog {
@@ -119,6 +128,21 @@ model SorobanEventSnapshot {
   @@index([ledgerSeq])
 }
 
+model SorobanStateAudit {
+  id             String   @id @default(cuid())
+  contractId     String
+  ledgerKey      String
+  ledgerSeq      Int
+  snapshot       Json
+  patch          Json
+  previousLedger Int?
+  createdAt      DateTime @default(now())
+
+  @@unique([contractId, ledgerKey, ledgerSeq])
+  @@index([contractId, ledgerKey, ledgerSeq])
+  @@index([createdAt])
+}
+
 model SorobanContractSubscription {
   id             String   @id @default(cuid())
   userId         String
@@ -132,4 +156,220 @@ model SorobanContractSubscription {
   @@unique([userId, contractId, topic])
   @@index([contractId])
   @@index([userId])
+}
+
+model SacTokenMintBurnEvent {
+  id         String   @id @default(cuid())
+  contractId   String
+  supply       SacTokenSupply @relation(fields: [contractId], references: [contractId], onDelete: Cascade)
+  eventType   String   @default("mint")
+  amount       Decimal
+  from         String?
+  to           String?
+  ledgerSeq    Int
+  txHash        String?
+  createdAt     DateTime @default(now())
+
+  @@index([contractId, ledgerSeq])
+  @@index([eventType])
+  @@index([ledgerSeq])
+}
+
+model SacTokenSupply {
+  contractId        String   @id
+  mintBurnEvents    SacTokenMintBurnEvent[]
+  circulatingSupply Decimal  @default("0")
+  totalMinted       Decimal  @default("0")
+  totalBurned        Decimal  @default("0")
+  updatedAt          DateTime @updatedAt
+  createdAt           DateTime @default(now())
+}
+
+// A Stellar multisig account (e.g. a DAO treasury) being watched for pending
+// transactions that need more co-signer approvals.
+model MultisigTreasury {
+  id             String   @id @default(cuid())
+  publicKey      String   @unique
+  label          String?
+  // Which of the account's threshold levels (low/med/high) a tracked
+  // transaction must clear. Most treasury payment/transfer operations use
+  // the medium threshold; callers that track ops requiring a different
+  // level (e.g. signer changes, which use high) can override per-treasury.
+  thresholdLevel String   @default("medium")
+  createdAt      DateTime @default(now())
+  signerWatchers MultisigSignerWatcher[]
+  pendingTxs     PendingMultisigTransaction[]
+}
+
+// Maps one of a treasury's on-chain signer keys to the user who should be
+// notified when that signer's approval is still outstanding.
+model MultisigSignerWatcher {
+  id              String   @id @default(cuid())
+  treasuryId      String
+  treasury        MultisigTreasury @relation(fields: [treasuryId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  signerPublicKey String
+  createdAt       DateTime @default(now())
+
+  @@unique([treasuryId, signerPublicKey])
+  @@index([treasuryId])
+  @@index([userId])
+}
+
+// A treasury transaction envelope collecting co-signer approvals before it
+// can be submitted on-chain.
+model PendingMultisigTransaction {
+  id                String   @id @default(cuid())
+  treasuryId        String
+  treasury          MultisigTreasury @relation(fields: [treasuryId], references: [id], onDelete: Cascade)
+  // Hash of the inner transaction (stable across additional signatures being
+  // appended to the same envelope), used to dedupe repeated submissions of
+  // an updated envelope for the same underlying transaction.
+  innerTxHash       String   @unique
+  envelopeXdr       String
+  requiredThreshold Int
+  collectedWeight   Int      @default(0)
+  signedByJson      Json     @default("[]")
+  notifiedJson      Json     @default("[]")
+  status            String   @default("pending") // pending | threshold_met | executed | expired
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([treasuryId])
+  @@index([status])
+}
+
+// A user's subscription to fiat deposit/withdrawal status updates for a
+// specific SEP-24/SEP-31 anchor transaction (identified by the anchor's own
+// transaction id, not a Stellar ledger tx hash — SEP transactions can exist
+// for a while in `incomplete`/`pending_external` before any ledger tx does).
+model AnchorTransactionWatch {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Base URL of the anchor's SEP-24 or SEP-31 transfer server, e.g.
+  // "https://anchor.example.com/sep24".
+  anchorEndpoint    String
+  // The anchor's own transaction id (SEP-24 `id` / SEP-31 `id` field).
+  anchorTxId        String
+  // "sep24" | "sep31"
+  protocol          String
+  lastKnownStatus   String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([anchorEndpoint, anchorTxId])
+  @@index([userId])
+  @@index([lastKnownStatus])
+}
+
+// A user's alert threshold on a Soroban DEX (Phoenix / Soroswap style)
+// liquidity pool contract for large swaps / high price-impact trades.
+model DexSwapWatch {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  poolContractId      String
+  // Minimum swap amount (in the pool's output asset, decimal string) that
+  // should trigger an alert. Null means "alert on every swap".
+  minAmountThreshold  String?
+  // Minimum price-impact / slippage percentage (e.g. "2.5" = 2.5%) that
+  // should trigger an alert regardless of amount.
+  minSlippagePercent  String?
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([userId, poolContractId])
+  @@index([poolContractId])
+}
+
+// ── Soroban Topic Indexer (WASM sub-ledger event filter) ──────────────────
+//
+// High-throughput index of raw Soroban RPC event TOPIC arrays, decoded from
+// their base64 XDR encoding into searchable JSONB columns. The worker
+// (workers/soroban-indexer.worker.ts) sweeps new ledger ranges, decodes the
+// nested ScVal topic array of every contract event, and upserts one row per
+// event here. Dashboard filtering / historical queries run against the two
+// GIN indexes (created over the JSONB `topics` column and the `text[]`
+// `topicSymbols` column with native `CREATE INDEX ... USING gin` in
+// `ensureTopicIndexes`) to stay under the 50ms topic-search SLA.
+model SorobanTopicIndex {
+  id          String   @id @default(cuid())
+  contractId  String
+  ledgerSeq   Int
+  // Transaction hash the event was emitted in (present on RPC getEvents
+  // responses; null for Horizon provideEvents payloads that omit it).
+  txHash      String?
+  // Raw base64 XDR topic array exactly as returned by the RPC/metahorizon
+  // node — preserved verbatim for auditability / re-decode.
+  topicXdrJson Json
+  // Fully decoded, type-tagged topic array, e.g.
+  // [{"type":"symbol","value":"transfer"},{"type":"address","value":"G..."}].
+  // Backed by a GIN jsonb_path_ops index so containment (`@>`) lookups such
+  // as "all events mentioning address X in topic position 1" stay fast.
+  topics      Json
+  // Flat, deduplicated text[] of every symbol found anywhere inside the
+  // topic tree (lead event name first). Backed by a GIN array_ops index for
+  // fast `@>` / `&&` symbol filtering.
+  topicSymbols String[]
+  // Lead symbol of the topic array (conventionally topic[0], the event name)
+  // for cheap btree equality filters that never touch the GIN path.
+  topicSymbol String?
+  // Deterministic sha256 hex of the canonical JSON of `topics` — the dedupe
+  // key so a re-polled ledger range never double-inserts an event (txHash is
+  // not always present on every event source).
+  topicsHash  String
+  createdAt   DateTime @default(now())
+
+  @@unique([contractId, ledgerSeq, topicsHash])
+  @@index([contractId, ledgerSeq])
+  @@index([topicSymbol])
+  @@index([txHash])
+}
+
+// Per-contract sub-ledger checkpoint for the topic indexer.
+model SorobanTopicIndexCursor {
+  id         String   @id @default(cuid())
+  contractId String   @unique
+  ledgerSeq  Int
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+}
+
+// Dedup / audit record of a detected DEX swap event so a re-polled ledger
+// range doesn't re-alert on the same on-chain swap.
+model DexSwapEvent {
+  id               String   @id @default(cuid())
+  poolContractId   String
+  ledgerSeq        Int
+  txHash           String?
+  tokenInAddress   String
+  tokenOutAddress  String
+  amountIn         String
+  amountOut        String
+  priceImpactPct   String?
+  createdAt        DateTime @default(now())
+
+  @@unique([poolContractId, ledgerSeq, tokenInAddress, tokenOutAddress, amountIn, amountOut])
+  @@index([poolContractId])
+  @@index([ledgerSeq])
+}
+
+// Audit record of security events and contract event replay attempts
+model SecurityAuditLog {
+  id          String   @id @default(cuid())
+  eventType   String   @default("EVENT_REPLAY_ATTEMPT")
+  txHash      String?
+  topic       String?
+  sequence    String?
+  contractId  String?
+  details     Json?
+  severity    String   @default("HIGH")
+  createdAt   DateTime @default(now())
+
+  @@index([eventType])
+  @@index([txHash])
+  @@index([createdAt])
 }
